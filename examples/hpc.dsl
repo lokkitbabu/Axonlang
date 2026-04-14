@@ -46,3 +46,8 @@ fn frobenius_norm(A: Tensor, n: f64) -> f64 {
     }
     return sqrt(acc);
 }
+
+// ── 7. Lorenz dx component ────────────────────────────────────────────────
+fn lorenz_dx(x: f64, y: f64, sigma: f64) -> f64 {
+    return sigma * (y - x);
+}

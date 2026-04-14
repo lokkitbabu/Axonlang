@@ -4,6 +4,8 @@ pub mod ir;
 pub mod opt;
 pub mod autodiff;
 pub mod typeck;
+pub mod interp;
+pub mod gradcheck;
 pub mod codegen;
 pub mod runner;
 pub mod llm_bridge;

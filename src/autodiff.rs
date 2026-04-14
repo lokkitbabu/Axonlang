@@ -335,10 +335,92 @@ impl<'a> AdjointCtx<'a> {
             // ── load/store: bookkeeping only, no VJP instructions needed ──
             Instruction::Load { .. } | Instruction::Store { .. } => {}
 
-            // ── call: treat as opaque (zero gradient, conservative) ────────
-            Instruction::Call { dest, func, .. } => {
-                self.emit_adj(Instruction::Comment(
-                    format!("opaque call to '{}' — gradient not propagated", func)));
+            // ── call: VJPs for known intrinsics, opaque otherwise ─────────
+            Instruction::Call { dest, func, args } => {
+                let s = self.get_adj_reg(dest);
+                match func.as_str() {
+                    // sin'(x)  = cos(x)
+                    "sin" if args.len() == 1 => {
+                        let cos_x = self.fresh();
+                        self.emit_adj(Instruction::Call {
+                            dest: cos_x.clone(), func: "cos".into(), args: args.clone() });
+                        let g = self.fresh();
+                        self.emit_adj(Instruction::Mul { dest: g.clone(), lhs: s, rhs: Value::Reg(cos_x) });
+                        self.acc_adj(&args[0], Value::Reg(g));
+                    }
+                    // cos'(x)  = -sin(x)
+                    "cos" if args.len() == 1 => {
+                        let sin_x = self.fresh();
+                        self.emit_adj(Instruction::Call {
+                            dest: sin_x.clone(), func: "sin".into(), args: args.clone() });
+                        let neg_sin = self.fresh();
+                        self.emit_adj(Instruction::Neg { dest: neg_sin.clone(), src: Value::Reg(sin_x) });
+                        let g = self.fresh();
+                        self.emit_adj(Instruction::Mul { dest: g.clone(), lhs: s, rhs: Value::Reg(neg_sin) });
+                        self.acc_adj(&args[0], Value::Reg(g));
+                    }
+                    // exp'(x)  = exp(x)
+                    "exp" if args.len() == 1 => {
+                        let exp_x = self.fresh();
+                        self.emit_adj(Instruction::Call {
+                            dest: exp_x.clone(), func: "exp".into(), args: args.clone() });
+                        let g = self.fresh();
+                        self.emit_adj(Instruction::Mul { dest: g.clone(), lhs: s, rhs: Value::Reg(exp_x) });
+                        self.acc_adj(&args[0], Value::Reg(g));
+                    }
+                    // log'(x)  = 1/x
+                    "log" if args.len() == 1 => {
+                        let inv_x = self.fresh();
+                        self.emit_adj(Instruction::Div {
+                            dest: inv_x.clone(), lhs: Value::ConstF64(1.0), rhs: args[0].clone() });
+                        let g = self.fresh();
+                        self.emit_adj(Instruction::Mul { dest: g.clone(), lhs: s, rhs: Value::Reg(inv_x) });
+                        self.acc_adj(&args[0], Value::Reg(g));
+                    }
+                    // sqrt'(x) = 0.5 / sqrt(x)
+                    "sqrt" if args.len() == 1 => {
+                        let sqrt_x = self.fresh();
+                        self.emit_adj(Instruction::Call {
+                            dest: sqrt_x.clone(), func: "sqrt".into(), args: args.clone() });
+                        let two_sqrt = self.fresh();
+                        self.emit_adj(Instruction::Mul {
+                            dest: two_sqrt.clone(), lhs: Value::ConstF64(2.0), rhs: Value::Reg(sqrt_x) });
+                        let inv = self.fresh();
+                        self.emit_adj(Instruction::Div {
+                            dest: inv.clone(), lhs: Value::ConstF64(1.0), rhs: Value::Reg(two_sqrt) });
+                        let g = self.fresh();
+                        self.emit_adj(Instruction::Mul { dest: g.clone(), lhs: s, rhs: Value::Reg(inv) });
+                        self.acc_adj(&args[0], Value::Reg(g));
+                    }
+                    // abs'(x)  = sign(x)
+                    "abs" if args.len() == 1 => {
+                        let sign_x = self.fresh();
+                        self.emit_adj(Instruction::Call {
+                            dest: sign_x.clone(), func: "sign".into(), args: args.clone() });
+                        let g = self.fresh();
+                        self.emit_adj(Instruction::Mul { dest: g.clone(), lhs: s, rhs: Value::Reg(sign_x) });
+                        self.acc_adj(&args[0], Value::Reg(g));
+                    }
+                    // tan'(x)  = 1 / cos²(x)
+                    "tan" if args.len() == 1 => {
+                        let cos_x = self.fresh();
+                        self.emit_adj(Instruction::Call {
+                            dest: cos_x.clone(), func: "cos".into(), args: args.clone() });
+                        let cos2 = self.fresh();
+                        self.emit_adj(Instruction::Mul {
+                            dest: cos2.clone(), lhs: Value::Reg(cos_x.clone()), rhs: Value::Reg(cos_x) });
+                        let inv = self.fresh();
+                        self.emit_adj(Instruction::Div {
+                            dest: inv.clone(), lhs: Value::ConstF64(1.0), rhs: Value::Reg(cos2) });
+                        let g = self.fresh();
+                        self.emit_adj(Instruction::Mul { dest: g.clone(), lhs: s, rhs: Value::Reg(inv) });
+                        self.acc_adj(&args[0], Value::Reg(g));
+                    }
+                    _ => {
+                        self.emit_adj(Instruction::Comment(
+                            format!("opaque call '{}' — gradient zeroed", func)));
+                    }
+                }
             }
 
             // ── comparisons, index, phi, tensor, comment — no gradient ─────
