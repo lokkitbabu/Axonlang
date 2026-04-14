@@ -1,0 +1,60 @@
+// ============================================================
+// scientific-dsl PEG Grammar  v2
+// ============================================================
+
+// ── Top-level program ────────────────────────────────────────
+// fn_def is a top-level item, NOT nested inside stmt.
+program    = { SOI ~ item* ~ EOI }
+item       = { fn_def | stmt }
+
+// ── Function definitions ─────────────────────────────────────
+fn_def     = { "fn" ~ identifier ~ "(" ~ param_list? ~ ")" ~ "->" ~ type_ann ~ block }
+param_list = { param ~ ("," ~ param)* }
+param      = { identifier ~ ":" ~ type_ann }
+type_ann   = { vec_type | type_kw | identifier }
+type_kw    = @{ "Tensor" | "f64" | "f32" }
+vec_type   = { "Vec" ~ "<" ~ type_ann ~ ">" }
+block      = { "{" ~ stmt* ~ "}" }
+
+// ── Statements ───────────────────────────────────────────────
+stmt       = { assign | for_loop | return_stmt | expr_stmt }
+assign     = { "let" ~ identifier ~ (":" ~ type_ann)? ~ "=" ~ expr ~ ";" }
+for_loop   = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
+return_stmt = { "return" ~ expr ~ ";" }
+expr_stmt  = { expr ~ ";" }
+
+// ── Expressions ──────────────────────────────────────────────
+expr           = { comparison }
+comparison     = { addition ~ (cmp_op ~ addition)? }
+addition       = { multiplication ~ (add_op ~ multiplication)* }
+multiplication = { power ~ (mul_op ~ power)* }
+power          = { unary ~ (pow_op ~ unary)? }
+// Use a named neg_op so it appears as an inner pair (pest silences bare strings)
+unary          = { (neg_op ~ unary) | postfix }
+neg_op         = { "-" }
+postfix        = { primary ~ (call_args | index_expr)* }
+call_args      = { "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+index_expr     = { "[" ~ expr ~ "]" }
+
+primary        = { tensor_literal | float | integer | identifier | paren_expr }
+paren_expr     = { "(" ~ expr ~ ")" }
+
+// ── Tensor literal ───────────────────────────────────────────
+tensor_literal = { "[" ~ expr ~ ("," ~ expr)* ~ "]" }
+
+// ── Operators (named so they appear in pairs) ─────────────────
+add_op  = { "+" | "-" }
+mul_op  = { "*" | "/" | "%" }
+pow_op  = { "^" }
+cmp_op  = { "<=" | ">=" | "==" | "!=" | "<" | ">" }
+
+// ── Terminals ────────────────────────────────────────────────
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// Require at least one digit after decimal to avoid greedily consuming "0." in "0..10"
+float  = @{ ("+" | "-")? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+integer = @{ ("+" | "-")? ~ ASCII_DIGIT+ }
+
+// ── Ignored ──────────────────────────────────────────────────
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* }
