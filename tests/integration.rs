@@ -541,3 +541,98 @@ fn test_gradcheck_kinetic_energy() {
     // ∂ke/∂v = m * v = 2 * 3 = 6
     assert!((result.analytic[1] - 6.0).abs() < 1e-4);
 }
+
+// ── Tape-based AD tests ───────────────────────────────────────────────────────
+
+use scientific_dsl::tape::{tape_grad, tape_gradcheck};
+
+#[test]
+fn test_tape_linear() {
+    let src  = "fn f(x: f64) -> f64 { return 3.0 * x + 1.0; }";
+    let prog = parser::parse(src).unwrap();
+    let m    = ir::lower_program(&prog).unwrap();
+    let (primal, grads) = tape_grad(&m.functions[0], &[2.0]).unwrap();
+    assert!((primal - 7.0).abs() < 1e-9, "primal: {}", primal);
+    assert!((grads[0] - 3.0).abs() < 1e-6, "grad: {}", grads[0]);
+}
+
+#[test]
+fn test_tape_quadratic() {
+    let src  = "fn f(x: f64) -> f64 { return x^2.0; }";
+    let prog = parser::parse(src).unwrap();
+    let m    = ir::lower_program(&prog).unwrap();
+    // f(3) = 9, f'(3) = 6
+    let (primal, grads) = tape_grad(&m.functions[0], &[3.0]).unwrap();
+    assert!((primal - 9.0).abs() < 1e-9);
+    assert!((grads[0] - 6.0).abs() < 1e-5, "f'(3)={}", grads[0]);
+}
+
+#[test]
+fn test_tape_intrinsics() {
+    for (src, x, expected_primal, expected_grad) in &[
+        ("fn f(x: f64) -> f64 { return sin(x); }", 1.0_f64, 1.0_f64.sin(), 1.0_f64.cos()),
+        ("fn f(x: f64) -> f64 { return exp(x); }", 1.0,     std::f64::consts::E, std::f64::consts::E),
+        ("fn f(x: f64) -> f64 { return log(x); }", 2.0,     2.0_f64.ln(), 0.5),
+        ("fn f(x: f64) -> f64 { return sqrt(x); }", 4.0,    2.0, 0.25),
+    ] {
+        let prog = parser::parse(src).unwrap();
+        let m    = ir::lower_program(&prog).unwrap();
+        let (primal, grads) = tape_grad(&m.functions[0], &[*x]).unwrap();
+        assert!((primal - expected_primal).abs() < 1e-8,
+            "{}: primal {} ≠ {}", src, primal, expected_primal);
+        assert!((grads[0] - expected_grad).abs() < 1e-5,
+            "{}: grad {} ≠ {}", src, grads[0], expected_grad);
+    }
+}
+
+#[test]
+fn test_tape_through_loop() {
+    // sum = Σᵢ₌₀..¹⁰ i  = 0+1+...+9 = 45; grad w.r.t. initial acc = 1.0 (it flows through)
+    let src = r#"
+        fn loop_sum(x: f64) -> f64 {
+            let acc = x;
+            for i in 0..10 {
+                let acc = acc + 1.0;
+            }
+            return acc;
+        }
+    "#;
+    let prog = parser::parse(src).unwrap();
+    let m    = ir::lower_program(&prog).unwrap();
+    let (primal, grads) = tape_grad(&m.functions[0], &[0.0]).unwrap();
+    // primal: 0 + 10 iterations of +1 = 10
+    assert!((primal - 10.0).abs() < 1e-9, "loop primal: {}", primal);
+    // grad of loop output w.r.t. initial x = 1.0 (acc is just shifted by constant)
+    assert!((grads[0] - 1.0).abs() < 1e-5, "loop grad: {}", grads[0]);
+}
+
+#[test]
+fn test_tape_gradcheck_kinetic() {
+    let src = "fn ke(m: f64, v: f64) -> f64 { return 0.5 * m * v^2.0; }";
+    let prog = parser::parse(src).unwrap();
+    let m    = ir::lower_program(&prog).unwrap();
+    let res  = tape_gradcheck(&m.functions[0], &[2.0, 3.0], 1e-5, 1e-4).unwrap();
+    assert!(res.passed, "{}", res.report());
+    assert!((res.analytic[0] - 4.5).abs() < 1e-4);  // ∂ke/∂m = 0.5*v² = 4.5
+    assert!((res.analytic[1] - 6.0).abs() < 1e-4);  // ∂ke/∂v = m*v = 6
+}
+
+#[test]
+fn test_tape_gradcheck_black_scholes() {
+    // bs_call: S=100, K=100, r=0.05, sigma=0.2, T=1.0
+    // Verifies that autodiff through log/sqrt/exp is correct
+    let src = r#"
+        fn bs_call(S: f64, K: f64, r: f64, sigma: f64, T: f64) -> f64 {
+            let d1  = (log(S / K) + (r + sigma^2.0 * 0.5) * T) / (sigma * sqrt(T));
+            let d2  = d1 - sigma * sqrt(T);
+            let nd1 = 1.0 / (1.0 + exp(-1.7 * d1));
+            let nd2 = 1.0 / (1.0 + exp(-1.7 * d2));
+            let disc = exp(-r * T);
+            return S * nd1 - K * disc * nd2;
+        }
+    "#;
+    let prog = parser::parse(src).unwrap();
+    let m    = ir::lower_program(&prog).unwrap();
+    let res  = tape_gradcheck(&m.functions[0], &[100.0, 100.0, 0.05, 0.2, 1.0], 1e-4, 1e-2).unwrap();
+    assert!(res.passed, "Black-Scholes gradcheck failed:\n{}", res.report());
+}

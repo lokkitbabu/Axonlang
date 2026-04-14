@@ -1,1 +1,10 @@
 /target
+*.ll
+*.cu
+*.mlir
+*.s
+*.ptx
+*.o
+*.so
+*.dylib
+Cargo.lock

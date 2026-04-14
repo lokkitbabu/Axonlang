@@ -370,6 +370,15 @@ impl LowerCtx {
                     false_block: exit_placeholder,
                 });
 
+                // Before lowering the body, invalidate env entries for any
+                // variable that is re-assigned inside the loop.  This forces a
+                // Load from @memory on first use inside each iteration, which
+                // correctly picks up the value written by the previous iteration.
+                let loop_writes = collect_loop_writes(body);
+                for name in &loop_writes {
+                    self.env.remove(name);
+                }
+
                 // Body
                 self.start_new_block(format!("loop_body_{}", var));
                 for s in body {
@@ -413,6 +422,22 @@ impl LowerCtx {
 // ─────────────────────────────────────────────────────────────────────────────
 // Public lowering API
 // ─────────────────────────────────────────────────────────────────────────────
+
+
+// Collect all variable names that are assigned (let-bound) inside a list of stmts,
+// including inside nested for-loops.  Used to invalidate loop-carried env entries.
+fn collect_loop_writes(stmts: &[Stmt]) -> std::collections::HashSet<String> {
+    use crate::ast::Stmt;
+    let mut names = std::collections::HashSet::new();
+    for s in stmts {
+        match s {
+            Stmt::Assign { name, .. } => { names.insert(name.clone()); }
+            Stmt::ForLoop { body, .. } => { names.extend(collect_loop_writes(body)); }
+            _ => {}
+        }
+    }
+    names
+}
 
 pub fn lower_program(program: &Program) -> Result<IrModule, DslError> {
     let mut module = IrModule::default();

@@ -6,6 +6,7 @@ pub mod autodiff;
 pub mod typeck;
 pub mod interp;
 pub mod gradcheck;
+pub mod tape;
 pub mod codegen;
 pub mod runner;
 pub mod llm_bridge;
